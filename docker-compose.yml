@@ -1,8 +1,8 @@
-name: stone-spearman
+name: stone-segment
 services:
   db:
     image: mysql:8.0
-    container_name: ${COMPOSE_PROJECT_NAME:-stone-spearman}-db
+    container_name: ${COMPOSE_PROJECT_NAME:-stone-segment}-db
     environment:
       MYSQL_DATABASE: research
       MYSQL_USER: research
@@ -17,7 +17,7 @@ services:
       retries: 40
   redis:
     image: redis:7-alpine
-    container_name: ${COMPOSE_PROJECT_NAME:-stone-spearman}-redis
+    container_name: ${COMPOSE_PROJECT_NAME:-stone-segment}-redis
     command: redis-server --appendonly yes
     volumes: ["redis-data:/data"]
     healthcheck:
@@ -27,11 +27,11 @@ services:
       retries: 20
   backend:
     build: ./backend
-    container_name: ${COMPOSE_PROJECT_NAME:-stone-spearman}-backend
+    container_name: ${COMPOSE_PROJECT_NAME:-stone-segment}-backend
     environment: &app-env
       DATABASE_URL: mysql+pymysql://research:${DB_PASSWORD:-local-demo-db-2026}@db:3306/research
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${JWT_SECRET:-local-demo-stone-spearman-replace-for-production}
+      JWT_SECRET: ${JWT_SECRET:-local-demo-stone-segment-replace-for-production}
       SEED_DEMO: ${SEED_DEMO:-true}
     ports: ["${BACKEND_PORT:-19243}:8000"]
     volumes: ["run-artifacts:/app/artifacts"]
@@ -45,10 +45,10 @@ services:
       retries: 40
   worker:
     build: ./backend
-    container_name: ${COMPOSE_PROJECT_NAME:-stone-spearman}-worker
+    container_name: ${COMPOSE_PROJECT_NAME:-stone-segment}-worker
     command: python -m src.worker
     environment: *app-env
-    volumes: ["run-artifacts:/app/artifacts"]
+    volumes: ["run-artifacts:/app/artifacts","run-checkpoints:/app/checkpoints"]
     depends_on:
       backend: {condition: service_healthy}
       db: {condition: service_healthy}
@@ -60,7 +60,7 @@ services:
       retries: 20
   frontend:
     build: ./frontend
-    container_name: ${COMPOSE_PROJECT_NAME:-stone-spearman}-frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-stone-segment}-frontend
     ports: ["${FRONTEND_PORT:-18243}:80"]
     depends_on:
       backend: {condition: service_healthy}
@@ -73,3 +73,4 @@ volumes:
   db-data:
   redis-data:
   run-artifacts:
+  run-checkpoints:

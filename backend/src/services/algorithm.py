@@ -1,42 +1,50 @@
-import math
+"""Independent oracle for the segmented fit.
+
+Deliberately shares no code with ``segmentation``: an O(n^2) memoised DP over
+explicit least-squares fits, used to check optimal cost and the exact set of
+mandatory cut positions (positions no optimal segment spans).
+"""
+
 import numpy as np
-from scipy import stats
 
-def finite_rows(snapshot,keys):
-    if not snapshot: raise ValueError('空批次无法分析')
-    result=[]
-    for row in snapshot:
-        values=row['values']
-        if any(k not in values for k in keys): raise ValueError('观测字段不完整')
-        x=[float(values[k]) for k in keys]
-        if not all(math.isfinite(v) for v in x): raise ValueError('观测必须为有限数值')
-        result.append(x)
-    return np.asarray(result,dtype=float)
 
-def average_ranks(values):
-    x=np.asarray(values,dtype=float);order=np.argsort(x,kind='stable');ranks=np.empty(len(x),dtype=float);i=0
-    while i<len(x):
-        j=i+1
-        while j<len(x) and x[order[j]]==x[order[i]]: j+=1
-        ranks[order[i:j]]=(i+1+j)/2;i=j
-    return ranks
+def segment_cost(x, y, a, b):
+    xx, yy = x[a:b], y[a:b]
+    if np.ptp(xx) == 0:
+        return float(((yy - yy.mean()) ** 2).sum())
+    X = np.column_stack([np.ones(b - a), xx])
+    beta, *_ = np.linalg.lstsq(X, yy, rcond=None)
+    resid = yy - X @ beta
+    return float(resid @ resid)
 
-def spearman(x,y):
-    rx,ry=average_ranks(x),average_ranks(y)
-    a,b=rx-rx.mean(),ry-ry.mean();den=float(np.linalg.norm(a)*np.linalg.norm(b))
-    if den==0: raise ValueError('常量列的秩相关系数未定义')
-    return float(np.dot(a,b)/den)
 
-def calculate(snapshot,params):
-    x=finite_rows(snapshot,['porosity','absorption'])
-    if len(x)<5: raise ValueError('至少5个独立试件')
-    rho=spearman(x[:,0],x[:,1]);B=int(params.get('resamples',4999))
-    if not 200<=B<=20000: raise ValueError('置换次数超出范围')
-    # Permute precomputed centered ranks; ties remain paired to original y values.
-    a=average_ranks(x[:,0]);b=average_ranks(x[:,1]);a-=a.mean();b-=b.mean();den=float(np.linalg.norm(a)*np.linalg.norm(b))
-    rng=np.random.default_rng(42);count=0
-    for _ in range(B):
-        rr=float(np.dot(a,rng.permutation(b))/den)
-        count+=abs(rr)>=abs(rho)-1e-12
-    p=(count+1)/(B+1)
-    return {'metrics':{'独立试件数':len(x),'Spearman秩相关ρ':rho,'双侧置换p(加一校正)':p,'置换次数':B,'孔隙率并列数':len(x)-len(np.unique(x[:,0])),'吸水率并列数':len(x)-len(np.unique(x[:,1])),'随机种子':42},'interpretation':f"本批孔隙率与吸水率的Spearman ρ={rho:.4f}，双侧置换p={p:.6g}。{'正' if rho>=0 else '负'}向秩关系只作为后续研究假设。",'caveat':'并列值按平均秩；检验要求独立可交换观测，相关不能推断因果。不能根据p值挑选或删改试件。','columns':['试件','孔隙率(%)','吸水率(%)','孔隙率平均秩','吸水率平均秩'],'rows':[[r['source_key'],*map(float,v),float(rx),float(ry)] for r,v,rx,ry in zip(snapshot,x,average_ranks(x[:,0]),average_ranks(x[:,1]))],'table_title':'逐试件原值与平均秩'}
+def solve(snapshot, penalty, min_rows=20, max_rows=200):
+    ordered = sorted(snapshot, key=lambda row: row['sequence'])
+    x = np.array([r['values']['porosity'] for r in ordered], dtype=float)
+    y = np.array([r['values']['absorption'] for r in ordered], dtype=float)
+    n = len(x)
+    cost = {}
+    for a in range(n):
+        for b in range(a + min_rows, min(n, a + max_rows) + 1):
+            cost[(a, b)] = segment_cost(x, y, a, b)
+    best = {n: 0.0}
+    for a in range(n - 1, -1, -1):
+        vals = [cost[(a, b)] + (penalty if a > 0 else 0.0) + best[b]
+                for b in range(a + min_rows, min(n, a + max_rows) + 1) if b in best]
+        if vals:
+            best[a] = min(vals)
+    optimal = best[0]
+    tol = 1e-9 * max(1.0, abs(optimal))
+    forward = {0: 0.0}
+    for b in range(min_rows, n + 1):
+        vals = [forward[a] + cost[(a, b)] + (penalty if a > 0 else 0.0)
+                for a in range(max(0, b - max_rows), b - min_rows + 1) if a in forward]
+        if vals:
+            forward[b] = min(vals)
+    spanned = set()
+    for a in range(n + 1):
+        for b in range(a + min_rows, min(n, a + max_rows) + 1):
+            if a in forward and b in best and abs(
+                    forward[a] + cost[(a, b)] + (penalty if a > 0 else 0.0) + best[b] - optimal) <= tol:
+                spanned.update(range(a + 1, b))
+    return optimal, [p for p in range(1, n) if p not in spanned]

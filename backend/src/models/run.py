@@ -10,6 +10,8 @@ class CorrelationRun(Base):
     snapshot=Column(JSON,nullable=False)
     checksum=Column(String(64),nullable=False)
     result=Column(JSON,nullable=True)
+    progress=Column(JSON,nullable=True)
+    row_count=Column(Integer,default=0)
     error=Column(Text,default='')
     created_at=Column(String(40),nullable=False)
 Run=CorrelationRun
